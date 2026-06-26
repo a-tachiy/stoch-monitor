@@ -1,0 +1,7 @@
+yfinance
+streamlit
+streamlit-autorefresh
+pandas
+altair
+requests
+beautifulsoup4
