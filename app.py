@@ -2,7 +2,7 @@ import streamlit as st
 import yfinance as yf
 from streamlit_autorefresh import st_autorefresh
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 import altair as alt
 import requests
@@ -143,26 +143,26 @@ def fetch_stock_data(ticker_symbol):
 
 @st.cache_data(ttl=60) # 60秒キャッシュ
 def fetch_bot_jpy_data():
-    """台湾銀行のウェブサイトから日本円の為替レートを取得する"""
-    url = "https://rate.bot.com.tw/xrt?Lang=zh-TW"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    """FinMind APIを使用して台湾銀行の日本円為替レートを取得する"""
+    url = "https://api.finmindtrade.com/api/v3/data"
+    # 土日や祝日を考慮して、直近5日前からのデータを取得する
+    start_date = (datetime.now() - timedelta(days=5)).strftime("%Y-%m-%d")
+    parameter = {
+        "dataset": "TaiwanExchangeRate",
+        "data_id": "JPY",
+        "date": start_date,
     }
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, params=parameter, timeout=10)
         response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
-        rows = soup.find_all('tr')
-        for row in rows:
-            currency_div = row.find('div', class_='visible-phone')
-            if currency_div and '日圓' in currency_div.text:
-                cash_buy = row.find('td', {'data-table': '本行現金買入'})
-                cash_sell = row.find('td', {'data-table': '本行現金賣出'})
-                
-                return {
-                    "cash_buy": float(cash_buy.text.strip()) if cash_buy and cash_buy.text.strip() != '-' else None,
-                    "cash_sell": float(cash_sell.text.strip()) if cash_sell and cash_sell.text.strip() != '-' else None,
-                }
+        data = response.json()
+        if data.get('status') == 200 and data.get('data'):
+            # 最後のレコード（最新の営業日データ）を取得
+            latest = data['data'][-1]
+            return {
+                "cash_buy": float(latest['cash_buy']) if latest.get('cash_buy') else None,
+                "cash_sell": float(latest['cash_sell']) if latest.get('cash_sell') else None,
+            }
     except Exception as e:
         st.error(f"台湾銀行のデータ取得エラー: {e}")
     return None
