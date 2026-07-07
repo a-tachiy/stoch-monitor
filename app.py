@@ -144,13 +144,13 @@ def fetch_stock_data(ticker_symbol):
 @st.cache_data(ttl=60) # 60秒キャッシュ
 def fetch_bot_jpy_data():
     """FinMind APIを使用して台湾銀行の日本円為替レートを取得する"""
-    url = "https://api.finmindtrade.com/api/v3/data"
+    url = "https://api.finmindtrade.com/api/v4/data"
     # 土日や祝日を考慮して、直近5日前からのデータを取得する
     start_date = (datetime.now() - timedelta(days=5)).strftime("%Y-%m-%d")
     parameter = {
         "dataset": "TaiwanExchangeRate",
         "data_id": "JPY",
-        "date": start_date,
+        "start_date": start_date,
     }
     try:
         response = requests.get(url, params=parameter, timeout=10)
