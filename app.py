@@ -72,61 +72,61 @@ count = st_autorefresh(interval=60000, limit=None, key="stock_autorefresh")
 
 @st.cache_data(ttl=60) # 60秒間キャッシュ
 def fetch_stock_data(ticker_symbol):
-    """yfinanceを使用して株価データを取得する"""
+    """yfinanceを使用して株価データを取得する（Cloud環境で安定動作するよう改善）"""
     try:
         ticker = yf.Ticker(ticker_symbol)
         
-        # yfinanceのhistory取得時に例外が出る場合があるのでリトライ
+        # 5日分の履歴データを取得（前日終値も履歴から算出するため ticker.info の呼出を回避）
+        hist = pd.DataFrame()
         for _ in range(3):
             try:
-                hist = ticker.history(period="1d")
+                hist = ticker.history(period="5d")
                 if not hist.empty:
                     break
             except Exception:
                 time.sleep(1)
-        else:
-             hist = pd.DataFrame() # リトライ失敗時は空のDataFrame
 
         if hist.empty:
-            # データが取得できない場合（休場やエラーなど）
-            # 直近のデータを取得してみる
-            hist = ticker.history(period="5d")
-            if hist.empty:
-                return None
+            return None
             
-        # 最新のデータを取得
+        # 最新の営業日データを取得
         current_data = hist.iloc[-1]
-        
-        # 現在値と当日高値
         current_price = float(current_data['Close'])
         daily_high = float(current_data['High'])
         
-        # 前日終値を取得して前日比を計算
-        info = ticker.info
-        previous_close = info.get('previousClose', None)
+        # 前日終値の取得（ticker.info を使わず、履歴データの1つ前の終値から安全に取得）
+        previous_close = None
+        if len(hist) >= 2:
+            previous_close = float(hist.iloc[-2]['Close'])
         
+        # ticker.info の呼び出しは Cloud 環境でブロックされやすいため安全にトライ
+        if previous_close is None:
+            try:
+                info = ticker.info or {}
+                if 'previousClose' in info and info['previousClose']:
+                    previous_close = float(info['previousClose'])
+            except Exception:
+                pass
+
         change_amount = 0.0
-        if previous_close:
-            change_amount = current_price - float(previous_close)
-            change_percent = (change_amount / float(previous_close)) * 100
-        else:
-            # infoからpreviousCloseが取れない場合のフォールバック
-            if len(hist) >= 2:
-                previous_close_hist = float(hist.iloc[-2]['Close'])
-                change_amount = current_price - previous_close_hist
-                change_percent = (change_amount / previous_close_hist) * 100
-            else:
-                change_percent = 0.0
+        change_percent = 0.0
+        if previous_close and previous_close > 0:
+            change_amount = current_price - previous_close
+            change_percent = (change_amount / previous_close) * 100
                 
         # 日本株か米国株か為替かで通貨を判定
         currency = "¥" if ticker_symbol.endswith(".T") or ticker_symbol.endswith("JPY=X") else "$"
         
-        # 当日のチャートデータを取得 (分足)
+        # 当日の分足チャートデータを取得
         try:
             hist_intra = ticker.history(period="1d", interval="5m")
             chart_data = hist_intra['Close'] if not hist_intra.empty else pd.Series()
         except Exception:
             chart_data = pd.Series()
+            
+        # 分足が取得できない場合は、5日間の日足終値をチャートとして代替利用
+        if chart_data.empty and not hist.empty:
+            chart_data = hist['Close']
         
         return {
             "current_price": current_price,
@@ -138,34 +138,36 @@ def fetch_stock_data(ticker_symbol):
             "previous_close": previous_close
         }
     except Exception as e:
-        st.error(f"Error fetching data for {ticker_symbol}: {e}")
+        print(f"Error fetching data for {ticker_symbol}: {e}")
         return None
 
 @st.cache_data(ttl=60) # 60秒キャッシュ
 def fetch_bot_jpy_data():
     """FinMind APIを使用して台湾銀行の日本円為替レートを取得する"""
     url = "https://api.finmindtrade.com/api/v4/data"
-    # 土日や祝日を考慮して、直近5日前からのデータを取得する
-    start_date = (datetime.now() - timedelta(days=5)).strftime("%Y-%m-%d")
+    # 土日や祝日を考慮して、直近7日前からのデータを取得する
+    start_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
     parameter = {
         "dataset": "TaiwanExchangeRate",
         "data_id": "JPY",
         "start_date": start_date,
     }
-    try:
-        response = requests.get(url, params=parameter, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        if data.get('status') == 200 and data.get('data'):
-            # 最後のレコード（最新の営業日データ）を取得
-            latest = data['data'][-1]
-            return {
-                "cash_buy": float(latest['cash_buy']) if latest.get('cash_buy') else None,
-                "cash_sell": float(latest['cash_sell']) if latest.get('cash_sell') else None,
-            }
-    except Exception as e:
-        st.error(f"台湾銀行のデータ取得エラー: {e}")
+    for _ in range(2):
+        try:
+            response = requests.get(url, params=parameter, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            if data.get('status') == 200 and data.get('data'):
+                # 最後のレコード（最新の営業日データ）を取得
+                latest = data['data'][-1]
+                return {
+                    "cash_buy": float(latest['cash_buy']) if latest.get('cash_buy') else None,
+                    "cash_sell": float(latest['cash_sell']) if latest.get('cash_sell') else None,
+                }
+        except Exception:
+            time.sleep(1)
     return None
+
 
 # ヘッダーとコントロールパネル
 col1, col2 = st.columns([3, 1])
